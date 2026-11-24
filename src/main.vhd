@@ -2,14 +2,7 @@ library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
 
-entity PmodENC_Counter is
-    Generic (
-        -- For Testbench simulation, override this value to 5
-        DEBOUNCE_LIMIT : integer := 25_000;
-        -- 50,000 cycles at 100 MHz = 1 kHz display refresh rate
-        -- For Testbench simulation, override this value to 5
-        DIV_LIMIT      : integer := 12_499
-    );
+entity MotorController is
     Port (
         clk   : in  STD_LOGIC; -- 100 MHz system clock
         reset : in  STD_LOGIC; -- Active-low asynchronous reset ('0')
@@ -19,193 +12,47 @@ entity PmodENC_Counter is
         LED   : out STD_LOGIC_VECTOR (8 downto 0); -- small LED to sum and debug
         seg   : out STD_LOGIC_VECTOR (7 downto 0)  -- 7-segment cathodes + DP (active-low)
     );
-end PmodENC_Counter;
+end MotorController;
 
-architecture Behavioral of PmodENC_Counter is
-    -- 2-FF synchronizers to prevent metastability on asynchronous Pmod inputs
-    signal A_sync, B_sync : STD_LOGIC_VECTOR(1 downto 0) := (others => '0');
-    signal A_prev         : STD_LOGIC := '0';
-   
+architecture Behavioral of MotorController is
     -- Sampling timer for PmodENC debouncing
-    signal deb_count      : integer range 0 to DEBOUNCE_LIMIT := 0;
-    signal step_en        : STD_LOGIC;
     signal positiveValue  : STD_LOGIC :='1';
 
     -- Internal BCD counter registers (0 to 9)
     signal cnt1_reg       : UNSIGNED(3 downto 0) := (others => '0');
     signal cnt2_reg       : UNSIGNED(3 downto 0) := (others => '0');
-    signal cnt_sum        : SIGNED(8 downto 0) := (others => '0');
     signal cnt_dir        : SIGNED(8 downto 0) := (others => '0');
-
-    -- Internal 7-segment decoded patterns
-    signal seg1, seg2, seg3    : STD_LOGIC_VECTOR(7 downto 0) := (others => '1');
-
-    -- Clock divider signals for display multiplexing
-    signal clk_sel        : UNSIGNED(2 downto 0) := (others => '0');
-    signal clk_count      : INTEGER :=1;
 begin
 
-    -- Detect a clean rising edge on A at each debounced sampling tick
-    step_en <= '1' when (deb_count = DEBOUNCE_LIMIT - 1 and A_sync(1) = '1' and A_prev = '0') else '0';
-    cnt_sum <= signed ('0' & (cnt2_reg*10 + cnt1_reg)); -- we sum the values, so we can later use them in the speed controller
-    cnt_dir <= -cnt_sum when positiveValue = '0' else cnt_sum;
     LED <= STD_LOGIC_VECTOR(cnt_dir); -- to show the if the sum is working 
 
-    -- Main sequential process: synchronization, debouncing, and BCD up/down counting
-    process(clk, reset)
-    begin
-        if reset = '0' then
-            A_sync    <= (others => '0');
-            B_sync    <= (others => '0');
-            A_prev    <= '0';
-            deb_count <= 0;
-            cnt1_reg  <= (others => '0');
-            cnt2_reg  <= (others => '0');
-            positiveValue <= '1';
+    U_ENCODER : entity work.RotaryEncController
+        generic map(
+            DEBOUNCE_LIMIT => 25_000
+        )
+        port map(
+            clk => clk,
+            reset => reset,
+            A => A,
+            B => B, 
+            cnt1 => cnt1_reg,
+            cnt2 => cnt2_reg,
+            cnt => cnt_dir,
+            positiveValue => positiveValue
+        );
 
-        elsif rising_edge(clk) then
-            -- 1. Synchronize external Pmod signals
-            -- A_sync(0) goes into A_sync(1) and A goes into A_sync(0) (same for B)
-            A_sync <= A_sync(0) & A;
-            B_sync <= B_sync(0) & B;
-
-            -- 2. Sample every 1 ms to filter mechanical contact bounce
-            if deb_count = DEBOUNCE_LIMIT - 1 then
-                deb_count <= 0;
-                A_prev    <= A_sync(1);
-            else
-                deb_count <= deb_count + 1;
-            end if;
-
-            -- 3. Up/Down BCD counter (00 to 99)
-            if step_en = '1' then
-                if B_sync(1) = positiveValue then -- Clockwise: INCREMENT
-                    if cnt1_reg = "1001" then
-                        if cnt2_reg /= "1001" then
-                            cnt2_reg <= cnt2_reg + 1;
-                            cnt1_reg <= (others => '0');
-                        end if;
-                    else
-                        if cnt2_reg /= "1000" then  
-                            cnt1_reg <= cnt1_reg + 1;
-                        end if;
-                    end if;
-
-                else -- B_sync(1) = '1' -> Counter-clockwise: DECREMENT
-                    if cnt1_reg = "0000" then
-                        if cnt2_reg /= "0000" then
-                            cnt2_reg <= cnt2_reg - 1;
-                            cnt1_reg <= "1001";
-                        else
-                            positiveValue <= not positiveValue;
-                            cnt1_reg <= cnt1_reg +1;
-                        end if;
-                    else
-                        cnt1_reg <= cnt1_reg - 1;
-                    end if;
-                end if;
-            end if;
-        end if;
-    end process;
-
-    -- Combinational 7-segment decoder for units (cnt1_reg)
-    process (cnt1_reg)
-    begin
-        case cnt1_reg is
-            when "0000" => seg1 <= "11000000"; -- 0
-            when "0001" => seg1 <= "11111001"; -- 1
-            when "0010" => seg1 <= "10100100"; -- 2
-            when "0011" => seg1 <= "10110000"; -- 3
-            when "0100" => seg1 <= "10011001"; -- 4
-            when "0101" => seg1 <= "10010010"; -- 5
-            when "0110" => seg1 <= "10000010"; -- 6
-            when "0111" => seg1 <= "11111000"; -- 7
-            when "1000" => seg1 <= "10000000"; -- 8
-            when "1001" => seg1 <= "10010000"; -- 9
-            when others => seg1 <= "11111111"; -- off
-        end case;
-    end process;
-
-    -- Combinational 7-segment decoder for tens (cnt2_reg)
-    process (cnt2_reg)
-    begin
-        case cnt2_reg is
-            when "0000" => seg2 <= "11000000"; -- 0
-            when "0001" => seg2 <= "11111001"; -- 1
-            when "0010" => seg2 <= "10100100"; -- 2
-            when "0011" => seg2 <= "10110000"; -- 3
-            when "0100" => seg2 <= "10011001"; -- 4
-            when "0101" => seg2 <= "10010010"; -- 5
-            when "0110" => seg2 <= "10000010"; -- 6
-            when "0111" => seg2 <= "11111000"; -- 7
-            when "1000" => seg2 <= "10000000"; -- 8
-            when "1001" => seg2 <= "10010000"; -- 9
-            when others => seg2 <= "11111111"; -- off
-        end case;
-    end process;
-    
-    process (positiveValue)
-    begin
-        if positiveValue /= '1' then 
-            seg3 <= "10111111";
-        else 
-            seg3 <="11111111";
-        end if;
-    end process;
-    
-    
-    -- Clock divider for 7-segment display multiplexing (~1 kHz)
-    process(clk, reset)
-    begin
-        if reset = '0' then
-            clk_count <= 1;
-            clk_sel   <=  (others => '0');
-        elsif rising_edge(clk) then
-            if clk_count = DIV_LIMIT then
-                if clk_sel = "111" then
-                    clk_sel <= (others => '0');
-                else
-                    clk_sel   <= clk_sel +1 ;
-                end if;
-                clk_count <= 1;
-            else
-                clk_count <= clk_count + 1;
-            end if;
-        end if;
-    end process;
-
-    -- Display multiplexer (switches active digit and segment data)
-    process(clk_sel, seg1, seg2)
-    begin
-        case clk_sel is
-            when "000" =>
-                seg <= seg1;       -- Output units digit to segments
-                AN  <= "11111110"; -- Enable rightmost display (AN0)
-            when "001" =>
-                seg <= seg2;       -- Output tens digit to segments
-                AN  <= "11111101"; -- Enable second display (AN1)
-            when "010" =>
-                seg <= seg3; 
-                AN  <= "11111011";
-            when "011" =>
-                seg <= "10000110";
-                AN  <= "11110111";
-            when "100" =>
-                seg <= seg1;       -- Output units digit to segments
-                AN  <= "11101111"; -- Enable rightmost display (AN0)
-            when "101" =>
-                seg <= seg2;       -- Output tens digit to segments
-                AN  <= "11011111"; -- Enable second display (AN1)
-            when "110" =>
-                seg <= seg3; 
-                AN  <= "10111111";
-            when "111" =>
-                 seg <= "10101111";
-                AN  <= "01111111";
-            when others =>
-                seg <= (others => '1');
-                AN  <= (others => '1');
-        end case;
-    end process;
+    U_DISPLAY : entity work.DisplayController
+        generic map(
+            DIV_LIMIT => 12_499
+        )
+        port map (
+            clk => clk,
+            reset => reset,
+            cnt1 => cnt1_reg,
+            cnt2 => cnt2_reg,
+            AN => AN,
+            seg => seg,
+            positiveValue => positiveValue
+        );
 
 end Behavioral;
