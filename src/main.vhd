@@ -5,12 +5,14 @@ use IEEE.NUMERIC_STD.ALL;
 entity MotorController is
     Port (
         clk   : in  STD_LOGIC; -- 100 MHz system clock
-        reset : in  STD_LOGIC; -- Active-low asynchronous reset ('0')
-        A     : in  STD_LOGIC; -- PmodENC channel A
-        B     : in  STD_LOGIC; -- PmodENC channel B
-        AN    : out STD_LOGIC_VECTOR (7 downto 0); -- 7-segment anodes (active-low)
-        LED   : out STD_LOGIC_VECTOR (8 downto 0); -- small LED to sum and debug
-        seg   : out STD_LOGIC_VECTOR (7 downto 0)  -- 7-segment cathodes + DP (active-low)
+        reset : in  STD_LOGIC; -- Active-low asynchronous reset ('0'), J15
+        A     : in  STD_LOGIC; -- rotary encoder channel A, JC
+        B     : in  STD_LOGIC; -- rotary encoder channel B, JC
+        Am     : in  STD_LOGIC; -- motor encoder channel A
+        Bm     : in  STD_LOGIC; -- motor encoder channel B
+        AN    : out STD_LOGIC_VECTOR (7 downto 0); -- 7-segment anodes (active-low). 7 segment power
+        LED   : out STD_LOGIC_VECTOR (8 downto 0); -- small LED to sum and debug LD 0 to 8
+        seg   : out STD_LOGIC_VECTOR (7 downto 0)  -- 7-segment cathodes + DP (active-low) 7 segments
     );
 end MotorController;
 
